@@ -2,13 +2,14 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
-  CreateDateColumn,
-  UpdateDateColumn,
   ManyToOne,
   OneToMany,
+  CreateDateColumn,
+  UpdateDateColumn,
   JoinColumn,
 } from "typeorm"
 import { Category } from "./Category"
+import { User } from "./User"
 import { Sale } from "./Sale"
 import { StockMovement } from "./StockMovement"
 
@@ -20,13 +21,23 @@ export class Product {
   @Column()
   name: string
 
+  @ManyToOne(() => Category, { nullable: false })
+  @JoinColumn({ name: "categoryId" })
+  category: Category
+
+  @Column()
+  productTypeId: string
+
+  @Column()
+  productTypeName: string
+
   @Column({ type: "decimal", precision: 10, scale: 2 })
   price: number
 
   @Column({ type: "decimal", precision: 10, scale: 2 })
   costPrice: number
 
-  @Column({ default: 0 })
+  @Column({ type: "int", default: 0 })
   qtyInStock: number
 
   @Column({ type: "text", nullable: true })
@@ -44,25 +55,21 @@ export class Product {
   @Column({ type: "text", nullable: true })
   otherAttributes?: string
 
-  // Store product type as simple fields instead of relation
-  @Column()
-  productTypeId: string
+  @Column({ type: "int", default: 10 })
+  minStockLevel: number
 
-  @Column()
-  productTypeName: string
-
-  // New profit tracking fields
   @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
   totalProfit: number
 
   @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
   totalSales: number
 
-  @Column({ default: 10 })
-  minStockLevel: number
-
-  @Column({ nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   lastSaleDate?: Date
+
+  @ManyToOne(() => User, { nullable: false })
+  @JoinColumn({ name: "createdById" })
+  createdBy: User
 
   @CreateDateColumn()
   createdAt: Date
@@ -71,16 +78,6 @@ export class Product {
   updatedAt: Date
 
   // Relationships
-  @ManyToOne(
-    () => Category,
-    (category) => category.products,
-    {
-      onDelete: "RESTRICT",
-    },
-  )
-  @JoinColumn({ name: "categoryId" })
-  category: Category
-
   @OneToMany(
     () => Sale,
     (sale) => sale.product,
@@ -89,25 +86,7 @@ export class Product {
 
   @OneToMany(
     () => StockMovement,
-    (stockMovement) => stockMovement.product,
+    (movement) => movement.product,
   )
   stockMovements: StockMovement[]
-
-  // Virtual properties (getters)
-  get profitMargin(): number {
-    if (this.price === 0) return 0
-    return ((this.price - this.costPrice) / this.price) * 100
-  }
-
-  get inventoryValue(): number {
-    return this.qtyInStock * this.costPrice
-  }
-
-  get potentialProfit(): number {
-    return this.qtyInStock * (this.price - this.costPrice)
-  }
-
-  get isLowStock(): boolean {
-    return this.qtyInStock <= this.minStockLevel
-  }
 }

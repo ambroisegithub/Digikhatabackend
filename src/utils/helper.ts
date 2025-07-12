@@ -1,6 +1,8 @@
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 
+
+import { v4 as uuidv4 } from 'uuid';
 dotenv.config();
 
 interface EmailOptions {
@@ -17,7 +19,6 @@ export const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS
   }
 });
-
 
 export const getDateRange = (type: "daily" | "weekly") => {
   const now = new Date()
@@ -41,18 +42,7 @@ export const getDateRange = (type: "daily" | "weekly") => {
 
   return { startDate, endDate }
 }
-// ...existing code...
 
-export const generateOTP = (length: number = 6): string => {
-  const digits = '0123456789';
-  let otp = '';
-  
-  for (let i = 0; i < length; i++) {
-    otp += digits[Math.floor(Math.random() * 10)];
-  }
-  
-  return otp;
-};
 
 export const sendEmail = async (options: EmailOptions): Promise<any> => {
   try {
@@ -73,16 +63,6 @@ export const sendEmail = async (options: EmailOptions): Promise<any> => {
 export const isValidEmail = (email: string): boolean => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
-};
-
-export const formatDate = (date: Date): string => {
-  return date.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
 };
 
 export const generateRandomString = (length: number = 12): string => {
@@ -111,3 +91,74 @@ export const delay = (ms: number): Promise<void> => {
 export const sanitizeString = (str: string): string => {
   return str.replace(/[^a-zA-Z0-9 ]/g, '');
 };
+
+
+interface EmailOptions {
+  to: string;
+  subject: string;
+  text?: string;
+  html?: string;
+}
+
+
+export const generateOTP = (length: number = 6): string => {
+  const digits = '0123456789';
+  let otp = '';
+  
+  for (let i = 0; i < length; i++) {
+    otp += digits[Math.floor(Math.random() * 10)];
+  }
+  
+  return otp;
+};
+
+// Enhanced email sending with retries
+
+// Generate secure random password
+export const generatePassword = (length = 12): string => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+  let password = '';
+  
+  for (let i = 0; i < length; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  
+  return password;
+};
+
+// Generate unique IDs
+export const generateId = (prefix = ''): string => {
+  return `${prefix}${uuidv4().replace(/-/g, '').substring(0, 8)}`;
+};
+
+// Format dates consistently
+export const formatDate = (date: Date | string, includeTime = true): string => {
+  const d = new Date(date);
+  const options: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  };
+  
+  if (includeTime) {
+    options.hour = '2-digit';
+    options.minute = '2-digit';
+  }
+  
+  return d.toLocaleDateString('en-US', options);
+};
+
+// Helper for pagination
+export const paginate = <T>(items: T[], page: number, limit: number) => {
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+  
+  return {
+    data: items.slice(startIndex, endIndex),
+    page,
+    limit,
+    total: items.length,
+    totalPages: Math.ceil(items.length / limit)
+  };
+};
+

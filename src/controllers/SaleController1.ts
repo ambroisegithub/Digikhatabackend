@@ -2,13 +2,12 @@
 import type { Request, Response } from "express"
 import { validationResult } from "express-validator"
 import dbConnection from "../database"
-import { PaymentMethod, Sale } from "../database/models/Sale"
+import { Sale } from "../database/models/Sale"
 import { Product } from "../database/models/Product"
 import { StockMovement } from "../database/models/StockMovement"
 import { UserRole } from "../Enums/UserRole"
-import { emitSaleCreated } from "../socketHandlers/salesSocketHandlers"
 
-// Utility functions for formatting (keeping existing ones)
+// Utility functions for formatting
 const formatCurrency = (amount: number, currency: string = "RWF"): string => {
   return `${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`
 }
@@ -21,7 +20,7 @@ const formatNumber = (value: number): number => {
   return Number(parseFloat(value.toString()).toFixed(2))
 }
 
-// Debug utility function (keeping existing)
+// Debug utility function
 const debugLog = (context: string, data: any) => {
   console.log(`\n=== DEBUG: ${context} ===`)
   console.log(JSON.stringify(data, null, 2))
@@ -29,7 +28,6 @@ const debugLog = (context: string, data: any) => {
 }
 
 export class EnhancedSaleController {
-  // ENHANCED: Create sale with real-time socket notification
   static async createSale(req: Request, res: Response) {
     const queryRunner = dbConnection.createQueryRunner()
     await queryRunner.connect()
@@ -44,7 +42,6 @@ export class EnhancedSaleController {
 
       const errors = validationResult(req)
       if (!errors.isEmpty()) {
-        await queryRunner.rollbackTransaction()
         return res.status(400).json({
           success: false,
           errors: errors.array(),
@@ -52,10 +49,9 @@ export class EnhancedSaleController {
       }
 
       const { productId, qtySold, paymentMethod, customerName, customerPhone, notes, employeeNotes } = req.body
-
       const user = req.user
+
       if (!user) {
-        await queryRunner.rollbackTransaction()
         return res.status(401).json({
           success: false,
           message: "Authentication required",
@@ -65,7 +61,7 @@ export class EnhancedSaleController {
       // Find product with creator information
       const product = await queryRunner.manager.findOne(Product, {
         where: { id: productId },
-        relations: ["createdBy", "category"],
+        relations: ["createdBy"],
       })
 
       if (!product) {
@@ -119,12 +115,10 @@ export class EnhancedSaleController {
 
       await queryRunner.manager.save(sale)
 
-      // Update product stock
       await queryRunner.manager.update(Product, productId, {
         qtyInStock: product.qtyInStock - qtySold,
       })
 
-      // Create stock movement record
       const stockMovement = queryRunner.manager.create(StockMovement, {
         product,
         type: "out",
@@ -144,42 +138,18 @@ export class EnhancedSaleController {
         relations: ["product", "product.category", "soldBy"],
       })
 
-      // **ENHANCED SOCKET INTEGRATION: Emit sale created notification with rich data**
-      if (req.io && completeSale) {
-        try {
-          emitSaleCreated(req.io, completeSale)
-          console.log(`🚀 Real-time notification sent for sale #${completeSale.saleNumber}`)
-        } catch (socketError) {
-          console.error("❌ Socket notification error:", socketError)
-          // Don't fail the response if socket fails
-        }
-      }
-
       debugLog("CREATE_SALE - Success", {
         saleId: sale.id,
         saleNumber: sale.saleNumber,
         profit: sale.profit,
         soldBy: user.id,
         productCreatedBy: product.createdBy.id,
-        socketNotificationSent: !!req.io
       })
 
-      // ENHANCED RESPONSE: Include socket notification status
       return res.status(201).json({
         success: true,
         message: "Sale created successfully, awaiting approval",
         data: completeSale,
-        realTimeNotification: {
-          sent: !!req.io,
-          timestamp: new Date().toISOString(),
-          pendingApproval: true
-        },
-        meta: {
-          saleNumber: completeSale.saleNumber,
-          totalAmount: formatCurrency(Number(completeSale.totalPrice)),
-          profit: formatCurrency(Number(completeSale.profit)),
-          status: completeSale.status
-        }
       })
     } catch (error) {
       await queryRunner.rollbackTransaction()
@@ -188,14 +158,13 @@ export class EnhancedSaleController {
       return res.status(500).json({
         success: false,
         message: "Failed to create sale",
-        error: process.env.NODE_ENV === "development" ? error.message : undefined
       })
     } finally {
       await queryRunner.release()
     }
   }
 
-  // ENHANCED: Get sales with real-time data and improved response format
+  // ✅ Enhanced: Get sales with improved response format
   static async getSales(req: Request, res: Response) {
     try {
       debugLog("GET_SALES - Request", {
@@ -213,8 +182,7 @@ export class EnhancedSaleController {
         paymentMethod, 
         productId, 
         employeeId,
-        currency = "RWF",
-        realTime = "false"
+        currency = "RWF"
       } = req.query
       
       const pageNum = Number.parseInt(page as string)
@@ -229,7 +197,6 @@ export class EnhancedSaleController {
         .leftJoinAndSelect("sale.soldBy", "soldBy")
         .leftJoinAndSelect("sale.approvedBy", "approvedBy")
 
-      // Role-based filtering
       if (req.user?.role === UserRole.EMPLOYEE) {
         queryBuilder.andWhere("sale.soldBy.id = :userId", { userId: req.userId })
       } else if (employeeId && req.user?.role === UserRole.ADMIN) {
@@ -263,7 +230,7 @@ export class EnhancedSaleController {
       // Get paginated results
       const sales = await queryBuilder.orderBy("sale.createdAt", "DESC").skip(skip).take(limitNum).getMany()
 
-      // Enhanced sales data with formatted values and real-time indicators
+      // Enhanced sales data with formatted values
       const enhancedSales = sales.map(sale => ({
         ...sale,
         // Add formatted values
@@ -284,15 +251,7 @@ export class EnhancedSaleController {
           firstName: sale.approvedBy.firstName,
           lastName: sale.approvedBy.lastName,
           role: sale.approvedBy.role
-        } : null,
-        // Add real-time status indicators
-        realTimeStatus: {
-          canApprove: sale.status === "pending" && req.user?.role === UserRole.ADMIN,
-          canReject: sale.status === "pending" && req.user?.role === UserRole.ADMIN,
-          isPending: sale.status === "pending",
-          age: Math.floor((new Date().getTime() - new Date(sale.createdAt).getTime()) / (1000 * 60)), // minutes
-          urgent: sale.status === "pending" && Math.floor((new Date().getTime() - new Date(sale.createdAt).getTime()) / (1000 * 60 * 60)) > 2 // older than 2 hours
-        }
+        } : null
       }))
 
       // Calculate enhanced summary
@@ -325,21 +284,13 @@ export class EnhancedSaleController {
           pending: {
             count: pendingSales.length,
             totalValue: formatNumber(pendingSales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)),
-            totalValueFormatted: formatCurrency(pendingSales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0), currency as string),
-            urgent: pendingSales.filter(sale => 
-              Math.floor((new Date().getTime() - new Date(sale.createdAt).getTime()) / (1000 * 60 * 60)) > 2
-            ).length
+            totalValueFormatted: formatCurrency(pendingSales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0), currency as string)
           },
           rejected: {
             count: rejectedSales.length,
             totalValue: formatNumber(rejectedSales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)),
             totalValueFormatted: formatCurrency(rejectedSales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0), currency as string)
           }
-        },
-        realTimeCapabilities: {
-          socketConnected: !!req.io,
-          autoRefresh: realTime === "true",
-          lastUpdated: new Date().toISOString()
         }
       }
 
@@ -347,7 +298,6 @@ export class EnhancedSaleController {
         salesCount: sales.length,
         totalRecords: total,
         userRole: req.user?.role,
-        realTimeEnabled: realTime === "true"
       })
 
       return res.json({
@@ -365,21 +315,15 @@ export class EnhancedSaleController {
             hasPrev: pageNum > 1,
             limit: limitNum
           },
-          realTime: {
-            enabled: realTime === "true",
-            socketAvailable: !!req.io,
-            autoRefreshRecommended: pendingSales.length > 0 && req.user?.role === UserRole.ADMIN
-          }
         },
       })
-    } catch (error:any) {
+    } catch (error) {
       debugLog("GET_SALES - Error", error)
       console.error("Get sales error:", error)
       return res.status(500).json({
         success: false,
         message: "Failed to fetch sales",
-        timestamp: new Date().toISOString(),
-        error: process.env.NODE_ENV === "development" ? error.message : undefined
+        timestamp: new Date().toISOString()
       })
     }
   }
@@ -672,70 +616,6 @@ export class EnhancedSaleController {
         success: false,
         message: "Failed to fetch employee sales",
         timestamp: new Date().toISOString()
-      })
-    }
-  }
-  // NEW: Real-time pending sales for admins
-  static async getPendingSales(req: Request, res: Response) {
-    try {
-      if (req.user?.role !== UserRole.ADMIN) {
-        return res.status(403).json({
-          success: false,
-          message: "Only admins can access pending sales",
-        })
-      }
-
-      const { limit = 50, currency = "RWF" } = req.query
-      const saleRepository = dbConnection.getRepository(Sale)
-
-      const pendingSales = await saleRepository.find({
-        where: { status: "pending" },
-        relations: ["product", "product.category", "soldBy"],
-        order: { createdAt: "DESC" },
-        take: Number(limit)
-      })
-
-      const enhancedPendingSales = pendingSales.map(sale => ({
-        ...sale,
-        totalPriceFormatted: formatCurrency(Number(sale.totalPrice), currency as string),
-        profitFormatted: formatCurrency(Number(sale.profit), currency as string),
-        age: Math.floor((new Date().getTime() - new Date(sale.createdAt).getTime()) / (1000 * 60)), // minutes
-        urgent: Math.floor((new Date().getTime() - new Date(sale.createdAt).getTime()) / (1000 * 60 * 60)) > 2, // older than 2 hours
-        realTimeActions: {
-          canApprove: true,
-          canReject: true,
-          socketAvailable: !!req.io
-        }
-      }))
-
-      const summary = {
-        totalPending: pendingSales.length,
-        totalValue: formatCurrency(pendingSales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0), currency as string),
-        urgentCount: enhancedPendingSales.filter(sale => sale.urgent).length,
-        socketConnected: !!req.io,
-        realTimeEnabled: true
-      }
-
-      return res.json({
-        success: true,
-        message: "Pending sales retrieved successfully",
-        timestamp: new Date().toISOString(),
-        data: {
-          pendingSales: enhancedPendingSales,
-          summary,
-          realTimeCapabilities: {
-            autoRefresh: false, // Now handled by sockets
-            socketNotifications: !!req.io,
-            bulkActions: true
-          }
-        }
-      })
-    } catch (error:any) {
-      console.error("Get pending sales error:", error)
-      return res.status(500).json({
-        success: false,
-        message: "Failed to fetch pending sales",
-        error: process.env.NODE_ENV === "development" ? error.message : undefined
       })
     }
   }
