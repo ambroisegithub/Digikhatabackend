@@ -63,6 +63,7 @@ export class ProductController {
         }
       }
 
+      const createdBy=req.user
       // Create new product
       const product = productRepository.create({
         name,
@@ -77,6 +78,7 @@ export class ProductController {
         size,
         color,
         otherAttributes,
+        createdBy
       })
 
       await productRepository.save(product)
@@ -474,4 +476,26 @@ export class ProductController {
       return res.status(500).json({ message: "Internal server error" })
     }
   }
+
+  static getEmployeeProducts = async (req: Request, res: Response) => {
+  try {
+    const { employeeId } = req.params;
+    const productRepository = dbConnection.getRepository(Product);
+    
+    const products = await productRepository.find({
+      where: { createdBy: { id: Number(employeeId) } },
+      relations: ["category", "createdBy"]
+    });
+
+    res.json({
+      success: true,
+      data: products
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch employee products"
+    });
+  }
+};
 }

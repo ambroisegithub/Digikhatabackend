@@ -11,6 +11,7 @@ import {
 import { Category } from "./Category"
 import { Sale } from "./Sale"
 import { StockMovement } from "./StockMovement"
+import { User } from "./User"
 
 @Entity("products")
 export class Product {
@@ -51,19 +52,6 @@ export class Product {
   @Column()
   productTypeName: string
 
-  // New profit tracking fields
-  @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
-  totalProfit: number
-
-  @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
-  totalSales: number
-
-  @Column({ default: 10 })
-  minStockLevel: number
-
-  @Column({ nullable: true })
-  lastSaleDate?: Date
-
   @CreateDateColumn()
   createdAt: Date
 
@@ -92,22 +80,7 @@ export class Product {
     (stockMovement) => stockMovement.product,
   )
   stockMovements: StockMovement[]
-
-  // Virtual properties (getters)
-  get profitMargin(): number {
-    if (this.price === 0) return 0
-    return ((this.price - this.costPrice) / this.price) * 100
-  }
-
-  get inventoryValue(): number {
-    return this.qtyInStock * this.costPrice
-  }
-
-  get potentialProfit(): number {
-    return this.qtyInStock * (this.price - this.costPrice)
-  }
-
-  get isLowStock(): boolean {
-    return this.qtyInStock <= this.minStockLevel
-  }
+  @ManyToOne(() => User, (user) => user.productsCreated)
+@JoinColumn({ name: "createdById" })
+createdBy: User;
 }

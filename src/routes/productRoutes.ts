@@ -1,5 +1,4 @@
 // @ts-nocheck
-
 import { Router } from "express"
 import { ProductController } from "../controllers/ProductController"
 import { authenticate, authorize } from "../middlewares/authMiddleware"

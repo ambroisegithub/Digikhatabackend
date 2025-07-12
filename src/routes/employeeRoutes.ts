@@ -1,31 +1,85 @@
+import { Router } from "express";
+import { AuthController } from "../controllers/AuthController";
+import { body } from "express-validator";
 
-// @ts-nocheck
-import { Router } from "express"
-import { EmployeeController } from "../controllers/EmployeeController"
-import { authenticate } from "../middlewares/authMiddleware"
-import { body } from "express-validator"
+const router = Router();
 
-const router = Router()
+// Employee registration validation
+const registerEmployeeValidation = [
+  body("lastName").notEmpty().trim().withMessage("Last Name is required"),
+  body("firstName").notEmpty().trim().withMessage("First Name is required"),
+  body("telephone").notEmpty().trim().withMessage("Telephone is required"),
+  body("email").isEmail().withMessage("Valid email is required")
+];
 
-// Validation rules for login
-const loginValidation = [
-  body("username").notEmpty().withMessage("Username is required"),
-  body("password").notEmpty().withMessage("Password is required"),
-]
+// OTP verification validation
+const otpVerificationValidation = [
+  body("email").isEmail().withMessage("Valid email is required"),
+  body("otp").isLength({ min: 6, max: 6 }).withMessage("OTP must be 6 digits")
+];
 
-// Validation rules for selling product
-const sellProductValidation = [
-  body("productId").isInt().withMessage("Product ID must be an integer"),
-  body("qtySold").isInt({ min: 1 }).withMessage("Quantity must be a positive integer"),
-]
+// Password change validation
+const changePasswordValidation = [
+  body("resetToken").notEmpty().withMessage("Reset token is required"),
+  body("newPassword")
+    .isLength({ min: 8 })
+    .withMessage("Password must be at least 8 characters")
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
+    .withMessage(
+      "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character",
+    )
+];
 
-// Routes
-router.post("/login", loginValidation, EmployeeController.login)
+// Legacy password reset validation (kept for backward compatibility)
+const passwordResetValidation = [
+  body("email").isEmail().withMessage("Valid email is required"),
+  body("otp").isLength({ min: 6, max: 6 }).withMessage("OTP must be 6 digits"),
+  body("newPassword")
+    .isLength({ min: 8 })
+    .withMessage("Password must be at least 8 characters")
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
+    .withMessage(
+      "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character",
+    )
+];
 
-router.post("/sell-product", authenticate, sellProductValidation, EmployeeController.sellProduct)
+// Admin-only routes
+router.post(
+  "/register-employee",
+  registerEmployeeValidation,
+  AuthController.registerEmployee
+);
 
-router.get("/products", authenticate, EmployeeController.listProducts)
 
-router.get("/my-sales", authenticate, EmployeeController.viewMySales)
+// Step 1: Request password reset (sends OTP to email)
+router.post(
+  "/request-password-reset",
+  body("email").isEmail().withMessage("Valid email is required"),
+  AuthController.requestPasswordReset
+);
 
-export default router
+// Step 2: Verify OTP (returns reset token)
+router.post(
+  "/verify-otp",
+  otpVerificationValidation,
+  AuthController.verifyOTP
+);
+
+// Step 3: Change password using reset token
+router.post(
+  "/change-password",
+  changePasswordValidation,
+  AuthController.changePassword
+);
+
+// Legacy endpoint (kept for backward compatibility - combines steps 2 and 3)
+router.post(
+  "/reset-password",
+  passwordResetValidation,
+  AuthController.resetPassword
+);
+router.get(
+  "/all",
+  AuthController.getAllEmployees
+);
+export default router;

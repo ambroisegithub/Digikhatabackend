@@ -1,69 +1,81 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from "typeorm"
-import { UserRole } from "../../Enums/UserRole"
-import { Sale } from "./Sale"
-import { StockMovement } from "./StockMovement"
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from "typeorm";
+import { UserRole } from "../../Enums/UserRole";
+import { Sale } from "./Sale";
+import { StockMovement } from "./StockMovement";
+import { Product } from "./Product";
 
 @Entity("users")
 export class User {
   @PrimaryGeneratedColumn()
-  id: number
+  id: number;
 
   @Column({ unique: true })
-  username: string
+  username: string;
 
   @Column({ unique: true })
-  email: string
+  email: string;
 
   @Column()
-  password: string
+  password: string;
 
   @Column()
-  telephone: string
+  telephone: string;
 
   @Column()
-  firstName: string
+  firstName: string;
 
   @Column()
-  lastName: string
+  lastName: string;
 
   @Column({
     type: "enum",
     enum: UserRole,
     default: UserRole.EMPLOYEE,
   })
-  role: UserRole
+  role: UserRole;
 
   @Column({ default: false })
-  isVerified: boolean
+  isVerified: boolean;
 
   @Column({ default: true })
-  isFirstLogin: boolean
+  isFirstLogin: boolean;
 
   @Column({ default: false })
-  is2FAEnabled: boolean
+  is2FAEnabled: boolean;
 
   @Column({ default: 0 })
-  otpAttempts: number
+  otpAttempts: number;
 
   @Column({ nullable: true })
-  otpSecret?: string
+  otpSecret?: string;
 
   @Column({ nullable: true })
-  lastLoginAt?: Date
+  lastLoginAt?: Date;
+
+  @Column({ default: true })
+  isActive: boolean;
+
+  @Column({ nullable: true })
+  resetPasswordToken?: string;
+
+  @Column({ nullable: true })
+  resetPasswordExpires?: Date;
 
   @CreateDateColumn()
-  createdAt: Date
+  createdAt: Date;
 
   @UpdateDateColumn()
-  updatedAt: Date
+  updatedAt: Date;
 
   // Relationships
   @OneToMany(() => Sale, (sale) => sale.soldBy)
-  salesMade: Sale[]
-
+  salesMade: Sale[];
+  
+  @OneToMany(() => Product, (product) => product.createdBy)
+  productsCreated: Product[];
   @OneToMany(() => Sale, (sale) => sale.approvedBy)
-  salesApproved: Sale[]
+  salesApproved: Sale[];
 
   @OneToMany(() => StockMovement, (stockMovement) => stockMovement.recordedBy)
-  stockMovements: StockMovement[]
+  stockMovements: StockMovement[];
 }
