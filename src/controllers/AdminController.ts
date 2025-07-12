@@ -1,500 +1,708 @@
-
 // @ts-nocheck
 import type { Request, Response } from "express"
-import { validationResult } from "express-validator"
+import dbConnection from "../database"
 import { User } from "../database/models/User"
 import { Product } from "../database/models/Product"
 import { Sale } from "../database/models/Sale"
+import { Between, LessThanOrEqual } from "typeorm"
 import { UserRole } from "../Enums/UserRole"
-import { generateRandomString, sendEmail } from "../utils/helper"
-import { LoginInstructionsEmailTemplate } from "../utils/emailTemplates"
-import { getDateRange } from "../utils/helper"
-import bcrypt from "bcryptjs"
-import { Between, LessThan } from "typeorm"
-import DbConnection from "../database"
-import dbConnection from "../database"
+import { subDays } from "date-fns"
+
+// Debug utility function
+const debugLog = (context: string, data: any) => {
+  console.log(`\n=== DEBUG: ${context} ===`)
+  console.log(JSON.stringify(data, null, 2))
+  console.log(`=== END DEBUG: ${context} ===\n`)
+}
+
+
 export class AdminController {
-  // Create a new employee account
-  static async createEmployee(req: Request, res: Response) {
+
+  static async getDashboardOverview(req: Request, res: Response) {
     try {
-      // Validate request
-      const errors = validationResult(req)
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() })
-      }
+      debugLog("ADMIN_DASHBOARD - Request", { userId: req.userId })
 
-      const userRepository = DbConnection.getRepository(User)
+      const userRepository = dbConnection.getRepository(User)
+      const productRepository = dbConnection.getRepository(Product)
+      const saleRepository = dbConnection.getRepository(Sale)
 
-      // Extract employee data from request body
-      const { firstName, lastName, email, telephone } = req.body
+      // Get date ranges
+      const today = new Date()
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59)
 
-      // Check if user with email already exists
-      const existingUser = await userRepository.findOne({
-        where: { email },
-      })
+      // Yesterday's date range
+      const yesterday = new Date(today)
+      yesterday.setDate(yesterday.getDate() - 1)
+      const startOfYesterday = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate())
+      const endOfYesterday = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59)
 
-      if (existingUser) {
-        return res.status(400).json({
-          message: "Email already exists",
+      // Week and month ranges
+      const startOfWeek = subDays(today, 7)
+      const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+
+      // Parallel data fetching for better performance
+      const [
+        employees,
+        totalProducts,
+        lowStockProducts,
+        criticalStockProducts,
+        todaySales,
+        yesterdaySales,
+        weeklySales,
+        monthlySales,
+        pendingSalesCount,
+        approvedSalesCount
+      ] = await Promise.all([
+        // Get all employees
+        userRepository.find({
+          where: { role: UserRole.EMPLOYEE },
+          select: ["id", "firstName", "lastName", "email", "isActive", "createdAt", "lastLoginAt"],
+          order: { createdAt: "DESC" },
+        }),
+
+        // Get total products
+        productRepository.count(),
+
+        // Get low stock products count
+        productRepository
+          .createQueryBuilder("product")
+          .where("product.qtyInStock <= product.minStockLevel")
+          .getCount(),
+
+        // Get critical stock products (stock <= 5)
+        productRepository.find({
+          where: {
+            qtyInStock: LessThanOrEqual(5)
+          },
+          select: ["id", "name", "qtyInStock", "minStockLevel"],
+          take: 5,
+          order: {
+            qtyInStock: "ASC"
+          }
+        }),
+
+        // Today's sales
+        saleRepository.find({
+          where: {
+            salesDate: Between(startOfDay, endOfDay),
+            status: "approved",
+          },
+          relations: ["soldBy", "product"],
+          order: { salesDate: "DESC" }
+        }),
+
+        // Yesterday's sales
+        saleRepository.find({
+          where: {
+            salesDate: Between(startOfYesterday, endOfYesterday),
+            status: "approved",
+          }
+        }),
+
+        // Weekly sales
+        saleRepository.find({
+          where: {
+            salesDate: Between(startOfWeek, endOfDay),
+            status: "approved",
+          }
+        }),
+
+        // Monthly sales
+        saleRepository.find({
+          where: {
+            salesDate: Between(startOfMonth, endOfDay),
+            status: "approved",
+          }
+        }),
+
+        // Pending sales count
+        saleRepository.count({
+          where: { status: "pending" },
+        }),
+
+        // Total approved sales count
+        saleRepository.count({
+          where: { status: "approved" },
+        })
+      ])
+
+      // Calculate today's metrics
+      const todayRevenue = todaySales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)
+      const todayProfit = todaySales.reduce((sum, sale) => sum + Number(sale.profit), 0)
+
+      // Calculate yesterday's metrics
+      const yesterdayRevenue = yesterdaySales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)
+      const yesterdayProfit = yesterdaySales.reduce((sum, sale) => sum + Number(sale.profit), 0)
+
+      // Calculate weekly metrics
+      const weeklyRevenue = weeklySales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)
+
+      // Calculate monthly metrics
+      const monthlyRevenue = monthlySales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)
+
+      // Calculate comparison percentages
+      const revenueChange = yesterdayRevenue > 0 
+        ? ((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100 
+        : todayRevenue > 0 ? 100 : 0
+
+      const profitChange = yesterdayProfit > 0 
+        ? ((todayProfit - yesterdayProfit) / yesterdayProfit) * 100 
+        : todayProfit > 0 ? 100 : 0
+
+      // Format critical stock products
+      const criticalStockFormatted = criticalStockProducts.map(product => ({
+        id: product.id,
+        name: product.name,
+        stock: product.qtyInStock,
+        minStock: product.minStockLevel
+      }))
+
+    const recentSalesFormatted = todaySales.slice(0, 5).map(sale => ({
+      id: sale.id,
+      saleNumber: sale.saleNumber,
+      totalPrice: sale.totalPrice,
+      profit: sale.profit,
+      soldBy: `${sale.soldBy.firstName} ${sale.soldBy.lastName}`,
+      time: sale.salesDate,
+      productName: sale.product.name
+    }))
+
+      // Generate quick actions based on current state
+      const quickActions = []
+      
+      if (pendingSalesCount > 0) {
+        quickActions.push({
+          id: 1,
+          title: "Approve Sales",
+          icon: "check-circle",
+          count: pendingSalesCount
         })
       }
 
-      // Generate username based on first and last name
-      const baseUsername = `${firstName.toLowerCase()}.${lastName.toLowerCase()}`
-      let username = baseUsername
-      let counter = 1
-
-      // Ensure username is unique
-      while (await userRepository.findOne({ where: { username } })) {
-        username = `${baseUsername}${counter}`
-        counter++
-      }
-
-      // Generate random password and hash it
-      const password = generateRandomString(12)
-      const hashedPassword = await bcrypt.hash(password, 12)
-
-      // Create new employee user
-      const employee = userRepository.create({
-        username,
-        email,
-        password: hashedPassword,
-        telephone,
-        firstName,
-        lastName,
-        role: UserRole.EMPLOYEE,
-        isVerified: false,
-        isFirstLogin: true,
-        is2FAEnabled: false,
-        otpAttempts: 0,
-      })
-
-      await userRepository.save(employee)
-
-      // Send login instructions email
-      const emailHtml = LoginInstructionsEmailTemplate(`${firstName} ${lastName}`, username, email, password)
-
-      await sendEmail({
-        to: email,
-        subject: "Welcome to StockTrack",
-        html: emailHtml,
-      })
-
-      // Return success response without password
-      const { password: _, ...employeeWithoutPassword } = employee
-      return res.status(201).json({
-        message: "Employee created successfully",
-        data: employeeWithoutPassword,
-      })
-    } catch (error) {
-      console.error("Error creating employee:", error)
-      return res.status(500).json({ message: "Internal server error" })
-    }
-  }
-
-  // List all employees
-  static async listEmployees(req: Request, res: Response) {
-    try {
-      const userRepository = DbConnection.getRepository(User)
-
-      // Find all employees
-      const employees = await userRepository.find({
-        where: { role: UserRole.EMPLOYEE },
-        select: ["id", "username", "email", "firstName", "lastName", "telephone", "createdAt", "isVerified"],
-      })
-
-      return res.status(200).json({
-        message: "Employees retrieved successfully",
-        data: employees,
-      })
-    } catch (error) {
-      console.error("Error listing employees:", error)
-      return res.status(500).json({ message: "Internal server error" })
-    }
-  }
-
-  // Add a new product
-  static async addProduct(req: Request, res: Response) {
-    try {
-      // Validate request
-      const errors = validationResult(req)
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() })
-      }
-
-      const productRepository = DbConnection.getRepository(Product)
-
-      // Extract product data from request body
-      const { name, category, price, costPrice, qtyInStock, description, sku } = req.body
-
-      // Check if product with SKU already exists
-      if (sku) {
-        const existingProduct = await productRepository.findOne({
-          where: { sku },
+      if (criticalStockProducts.length > 0) {
+        quickActions.push({
+          id: 2,
+          title: "Restock Items",
+          icon: "package",
+          count: criticalStockProducts.length
         })
+      }
 
-        if (existingProduct) {
-          return res.status(400).json({
-            message: "Product with this SKU already exists",
-          })
+      quickActions.push({
+        id: 3,
+        title: "Add Employee",
+        icon: "user-plus"
+      })
+
+      if (todaySales.length === 0 && new Date().getHours() > 10) {
+        quickActions.push({
+          id: 4,
+          title: "Check Sales Activity",
+          icon: "trending-down"
+        })
+      }
+
+      // Enhanced dashboard response structure
+      const enhancedDashboardData = {
+        summary: {
+          today: {
+            revenue: todayRevenue,
+            profit: todayProfit,
+            transactions: todaySales.length,
+            pendingSales: pendingSalesCount,
+            comparison: {
+              revenueChange: Math.round(revenueChange * 100) / 100,
+              profitChange: Math.round(profitChange * 100) / 100
+            }
+          },
+          week: {
+            revenue: weeklyRevenue,
+            transactions: weeklySales.length
+          },
+          month: {
+            revenue: monthlyRevenue,
+            transactions: monthlySales.length
+          }
+        },
+        employees: {
+          total: employees.length,
+          active: employees.filter(emp => emp.isActive).length
+        },
+        inventory: {
+          totalProducts: totalProducts,
+          lowStock: lowStockProducts,
+          criticalStock: criticalStockFormatted
+        },
+        recentActivity: {
+          sales: recentSalesFormatted,
+          pendingApprovals: pendingSalesCount
+        },
+        quickActions: quickActions,
+        
+        // Keep original structure for backward compatibility
+        legacy: {
+          employees: {
+            total: employees.length,
+            active: employees.filter(emp => emp.isActive).length,
+            list: employees,
+          },
+          products: {
+            total: totalProducts,
+            lowStock: lowStockProducts,
+          },
+          todayMetrics: {
+            revenue: todayRevenue,
+            profit: todayProfit,
+            transactions: todaySales.length,
+            pendingSales: pendingSalesCount,
+          },
+          recentSales: todaySales.slice(0, 10).map(sale => ({
+            id: sale.id,
+            saleNumber: sale.saleNumber,
+            totalPrice: sale.totalPrice,
+            profit: sale.profit,
+            soldBy: `${sale.soldBy.firstName} ${sale.soldBy.lastName}`,
+            salesDate: sale.salesDate,
+            productName: sale.product.name
+
+          })),
         }
       }
 
-      // Create new product
-      const product = productRepository.create({
-        name,
-        category,
-        price,
-        costPrice,
-        qtyInStock,
-        description,
-        sku,
+      debugLog("ADMIN_DASHBOARD - Success", {
+        employeesCount: employees.length,
+        todayRevenue,
+        todayProfit,
+        revenueChange,
+        profitChange,
+        criticalStockCount: criticalStockProducts.length
       })
 
-      await productRepository.save(product)
-
-      return res.status(201).json({
-        message: "Product added successfully",
-        data: product,
+      return res.json({
+        success: true,
+        message: "Dashboard data retrieved successfully",
+        data: enhancedDashboardData,
       })
     } catch (error) {
-      console.error("Error adding product:", error)
-      return res.status(500).json({ message: "Internal server error" })
+      debugLog("ADMIN_DASHBOARD - Error", error)
+      console.error("Admin dashboard error:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch dashboard data",
+      })
     }
   }
 
-  // Delete a product
-  static async deleteProduct(req: Request, res: Response) {
+  // ✅ Fix 2: Daily sales aggregation for all employees
+  static async getDailySalesAggregation(req: Request, res: Response) {
     try {
-      const productRepository = DbConnection.getRepository(Product)
-      const saleRepository = DbConnection.getRepository(Sale)
+      const { date, period = "today" } = req.query
+      const saleRepository = dbConnection.getRepository(Sale)
 
-      const productId = Number.parseInt(req.params.id)
+      let startDate: Date, endDate: Date
+      const now = new Date()
 
-      // Check if product exists
-      const product = await productRepository.findOne({
-        where: { id: productId },
-      })
-
-      if (!product) {
-        return res.status(404).json({ message: "Product not found" })
+      // Determine date range
+      switch (period) {
+        case "today":
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+          endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59)
+          break
+        case "week":
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+          endDate = now
+          break
+        case "month":
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
+          break
+        default:
+          if (date) {
+            const targetDate = new Date(date as string)
+            startDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate())
+            endDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59)
+          } else {
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+            endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59)
+          }
       }
 
-      // Check if product has associated sales
+      // Get sales data with employee information
       const sales = await saleRepository.find({
-        where: { product: { id: productId } },
+        where: {
+          salesDate: Between(startDate, endDate),
+          status: "approved",
+        },
+        relations: ["soldBy", "product"],
       })
 
-      if (sales.length > 0) {
-        return res.status(400).json({
-          message: "Cannot delete product with associated sales",
-          salesCount: sales.length,
-        })
+      // Group by employee and date
+      const employeeDailySales = sales.reduce((acc, sale) => {
+        const employeeId = sale.soldBy.id
+        const employeeName = `${sale.soldBy.firstName} ${sale.soldBy.lastName}`
+        const dateKey = sale.salesDate.toISOString().split("T")[0]
+
+        if (!acc[employeeId]) {
+          acc[employeeId] = {
+            employeeId,
+            employeeName,
+            dailyBreakdown: {},
+            totalSales: 0,
+            totalProfit: 0,
+            totalTransactions: 0,
+          }
+        }
+
+        if (!acc[employeeId].dailyBreakdown[dateKey]) {
+          acc[employeeId].dailyBreakdown[dateKey] = {
+            date: dateKey,
+            sales: 0,
+            profit: 0,
+            transactions: 0,
+          }
+        }
+
+        acc[employeeId].dailyBreakdown[dateKey].sales += Number(sale.totalPrice)
+        acc[employeeId].dailyBreakdown[dateKey].profit += Number(sale.profit)
+        acc[employeeId].dailyBreakdown[dateKey].transactions += 1
+
+        acc[employeeId].totalSales += Number(sale.totalPrice)
+        acc[employeeId].totalProfit += Number(sale.profit)
+        acc[employeeId].totalTransactions += 1
+
+        return acc
+      }, {})
+
+      // Convert to array and sort by total sales
+      const aggregatedData = Object.values(employeeDailySales).sort((a: any, b: any) => b.totalSales - a.totalSales)
+
+      // Calculate overall summary
+      const overallSummary = {
+        period,
+        dateRange: { start: startDate, end: endDate },
+        totalEmployees: aggregatedData.length,
+        totalSales: aggregatedData.reduce((sum: number, emp: any) => sum + emp.totalSales, 0),
+        totalProfit: aggregatedData.reduce((sum: number, emp: any) => sum + emp.totalProfit, 0),
+        totalTransactions: aggregatedData.reduce((sum: number, emp: any) => sum + emp.totalTransactions, 0),
+        topPerformer: aggregatedData[0] || null,
       }
 
-      // Delete product
-      await productRepository.remove(product)
-
-      return res.status(200).json({
-        message: "Product deleted successfully",
+      return res.json({
+        success: true,
+        message: "Daily sales aggregation retrieved successfully",
+        data: {
+          summary: overallSummary,
+          employeeBreakdown: aggregatedData,
+        },
       })
     } catch (error) {
-      console.error("Error deleting product:", error)
-      return res.status(500).json({ message: "Internal server error" })
+      console.error("Daily sales aggregation error:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch daily sales aggregation",
+      })
     }
   }
 
-  // View pending sales
-  static async viewPendingSales(req: Request, res: Response) {
+  // ✅ Fix 6: Profit/Loss analysis per product and category
+  static async getProfitAnalysis(req: Request, res: Response) {
     try {
-      const saleRepository = DbConnection.getRepository(Sale)
+      const { period = "30", categoryId, employeeId } = req.query
+      const saleRepository = dbConnection.getRepository(Sale)
+      const productRepository = dbConnection.getRepository(Product)
 
-      // Find all pending sales with related product and employee info
-      const pendingSales = await saleRepository.find({
-        where: { status: "pending" },
-        relations: ["product", "soldBy"],
-        order: { salesDate: "DESC" },
+      const daysBack = Number.parseInt(period as string)
+      const startDate = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
+
+      // Build query conditions
+      let queryBuilder = saleRepository
+        .createQueryBuilder("sale")
+        .leftJoinAndSelect("sale.product", "product")
+        .leftJoinAndSelect("product.category", "category")
+        .leftJoinAndSelect("sale.soldBy", "soldBy")
+        .where("sale.status = :status", { status: "approved" })
+        .andWhere("sale.salesDate >= :startDate", { startDate })
+
+      if (categoryId) {
+        queryBuilder = queryBuilder.andWhere("product.category.id = :categoryId", { categoryId })
+      }
+
+      if (employeeId) {
+        queryBuilder = queryBuilder.andWhere("sale.soldBy.id = :employeeId", { employeeId })
+      }
+
+      const sales = await queryBuilder.getMany()
+
+      // Analyze by product
+      const productAnalysis = sales.reduce((acc, sale) => {
+        const productId = sale.product.id
+        if (!acc[productId]) {
+          acc[productId] = {
+            productId,
+            productName: sale.product.name,
+            categoryName: sale.product.category.name,
+            totalSales: 0,
+            totalProfit: 0,
+            totalQuantitySold: 0,
+            salesCount: 0,
+            avgSaleValue: 0,
+            profitMargin: 0,
+          }
+        }
+
+        acc[productId].totalSales += Number(sale.totalPrice)
+        acc[productId].totalProfit += Number(sale.profit)
+        acc[productId].totalQuantitySold += Number(sale.qtySold)
+        acc[productId].salesCount += 1
+
+        return acc
+      }, {})
+
+      // Calculate averages and margins
+      Object.values(productAnalysis).forEach((product: any) => {
+        product.avgSaleValue = product.totalSales / product.salesCount
+        product.profitMargin = product.totalSales > 0 ? (product.totalProfit / product.totalSales) * 100 : 0
       })
 
-      return res.status(200).json({
-        message: "Pending sales retrieved successfully",
-        data: pendingSales,
+      // Analyze by category
+      const categoryAnalysis = sales.reduce((acc, sale) => {
+        const categoryId = sale.product.category.id
+        const categoryName = sale.product.category.name
+
+        if (!acc[categoryId]) {
+          acc[categoryId] = {
+            categoryId,
+            categoryName,
+            totalSales: 0,
+            totalProfit: 0,
+            totalQuantitySold: 0,
+            salesCount: 0,
+            productCount: new Set(),
+          }
+        }
+
+        acc[categoryId].totalSales += Number(sale.totalPrice)
+        acc[categoryId].totalProfit += Number(sale.profit)
+        acc[categoryId].totalQuantitySold += Number(sale.qtySold)
+        acc[categoryId].salesCount += 1
+        acc[categoryId].productCount.add(sale.product.id)
+
+        return acc
+      }, {})
+
+      // Convert sets to counts
+      Object.values(categoryAnalysis).forEach((category: any) => {
+        category.uniqueProducts = category.productCount.size
+        delete category.productCount
+        category.profitMargin = category.totalSales > 0 ? (category.totalProfit / category.totalSales) * 100 : 0
+      })
+
+      // Overall summary
+      const overallSummary = {
+        period: `${period} days`,
+        totalSales: sales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0),
+        totalProfit: sales.reduce((sum, sale) => sum + Number(sale.profit), 0),
+        totalTransactions: sales.length,
+        profitMargin:
+          sales.length > 0
+            ? (sales.reduce((sum, sale) => sum + Number(sale.profit), 0) /
+                sales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)) *
+              100
+            : 0,
+        topProduct: Object.values(productAnalysis).sort((a: any, b: any) => b.totalProfit - a.totalProfit)[0] || null,
+        topCategory: Object.values(categoryAnalysis).sort((a: any, b: any) => b.totalProfit - a.totalProfit)[0] || null,
+      }
+
+      return res.json({
+        success: true,
+        message: "Profit analysis retrieved successfully",
+        data: {
+          summary: overallSummary,
+          productAnalysis: Object.values(productAnalysis).sort((a: any, b: any) => b.totalProfit - a.totalProfit),
+          categoryAnalysis: Object.values(categoryAnalysis).sort((a: any, b: any) => b.totalProfit - a.totalProfit),
+        },
       })
     } catch (error) {
-      console.error("Error viewing pending sales:", error)
-      return res.status(500).json({ message: "Internal server error" })
+      console.error("Profit analysis error:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch profit analysis",
+      })
     }
   }
 
-  // Approve a sale
+  // Approve sale with timestamp logging
   static async approveSale(req: Request, res: Response) {
     try {
-      const saleRepository = DbConnection.getRepository(Sale)
-      const productRepository = DbConnection.getRepository(Product)
+      const { saleId } = req.params
+      const saleRepository = dbConnection.getRepository(Sale)
 
-      const saleId = Number.parseInt(req.params.id)
-
-      // Find the sale with related product
       const sale = await saleRepository.findOne({
-        where: { id: saleId },
-        relations: ["product"],
+        where: { id: Number(saleId) },
+        relations: ["product", "soldBy"],
       })
 
       if (!sale) {
-        return res.status(404).json({ message: "Sale not found" })
+        return res.status(404).json({
+          success: false,
+          message: "Sale not found",
+        })
       }
 
       if (sale.status !== "pending") {
         return res.status(400).json({
-          message: `Sale is already ${sale.status}`,
+          success: false,
+          message: "Sale is not pending approval",
         })
       }
 
-      // Update sale status and set approver
+      // ✅ Fix 7: Log approval timestamp
       sale.status = "approved"
       sale.approvedBy = req.user
+      sale.approvedAt = new Date()
 
       await saleRepository.save(sale)
 
-      return res.status(200).json({
+      return res.json({
+        success: true,
         message: "Sale approved successfully",
         data: sale,
       })
     } catch (error) {
-      console.error("Error approving sale:", error)
-      return res.status(500).json({ message: "Internal server error" })
+      console.error("Approve sale error:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Failed to approve sale",
+      })
     }
   }
 
-  // Generate daily report
-  static async dailyReport(req: Request, res: Response) {
-    try {
-      const saleRepository = DbConnection.getRepository(Sale)
-      const productRepository = DbConnection.getRepository(Product)
-
-      // Get date range for today
-      const { startDate, endDate } = getDateRange("daily")
-
-      // Get all approved sales for today
-      const sales = await saleRepository.find({
-        where: {
-          status: "approved",
-          salesDate: Between(startDate, endDate),
-        },
-        relations: ["product", "soldBy", "approvedBy"],
-      })
-
-      // Calculate total sales and profit
-      const totalSales = sales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)
-      const totalProfit = sales.reduce((sum, sale) => sum + Number(sale.profit), 0)
-
-      // Get low stock products (less than 10 items)
-      const lowStockProducts = await productRepository.find({
-        where: { qtyInStock: LessThan(10) },
-      })
-
-      return res.status(200).json({
-        message: "Daily report generated successfully",
-        data: {
-          date: new Date().toISOString().split("T")[0],
-          salesCount: sales.length,
-          totalSales,
-          totalProfit,
-          sales,
-          lowStockProducts,
-          lowStockCount: lowStockProducts.length,
-        },
-      })
-    } catch (error) {
-      console.error("Error generating daily report:", error)
-      return res.status(500).json({ message: "Internal server error" })
-    }
-  }
-
-  // Generate weekly report
-  static async weeklyReport(req: Request, res: Response) {
-    try {
-      const saleRepository = DbConnection.getRepository(Sale)
-
-      // Get date range for the past week
-      const { startDate, endDate } = getDateRange("weekly")
-
-      // Get all approved sales for the past week
-      const sales = await saleRepository.find({
-        where: {
-          status: "approved",
-          salesDate: Between(startDate, endDate),
-        },
-        relations: ["product", "soldBy", "approvedBy"],
-      })
-
-      // Group sales by day
-      const salesByDay = sales.reduce((acc, sale) => {
-        const day = new Date(sale.salesDate).toISOString().split("T")[0]
-        if (!acc[day]) {
-          acc[day] = {
-            date: day,
-            salesCount: 0,
-            totalSales: 0,
-            totalProfit: 0,
-          }
-        }
-        acc[day].salesCount += 1
-        acc[day].totalSales += Number(sale.totalPrice)
-        acc[day].totalProfit += Number(sale.profit)
-        return acc
-      }, {})
-
-      // Calculate overall totals
-      const totalSales = sales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)
-      const totalProfit = sales.reduce((sum, sale) => sum + Number(sale.profit), 0)
-
-      return res.status(200).json({
-        message: "Weekly report generated successfully",
-        data: {
-          startDate: startDate.toISOString().split("T")[0],
-          endDate: endDate.toISOString().split("T")[0],
-          salesCount: sales.length,
-          totalSales,
-          totalProfit,
-          dailyBreakdown: Object.values(salesByDay),
-        },
-      })
-    } catch (error) {
-      console.error("Error generating weekly report:", error)
-      return res.status(500).json({ message: "Internal server error" })
-    }
-  }
-
-    static async getAllSales(req: Request, res: Response) {
-    try {
-      const saleRepository = DbConnection.getRepository(Sale)
-      const { status, startDate, endDate, productId, soldById } = req.query
-
-      // Build query conditions
-      const queryConditions: any = {}
-
-      if (status) {
-        queryConditions.status = status
-      }
-
-      if (startDate && endDate) {
-        queryConditions.salesDate = {
-          $gte: new Date(startDate as string),
-          $lte: new Date(endDate as string),
-        }
-      }
-
-      if (productId) {
-        queryConditions.product = { id: Number(productId) }
-      }
-
-      if (soldById) {
-        queryConditions.soldBy = { id: Number(soldById) }
-      }
-
-      const sales = await saleRepository.find({
-        where: queryConditions,
-        relations: ["product", "soldBy", "approvedBy"],
-        order: { salesDate: "DESC" },
-      })
-
-      return res.status(200).json({
-        message: "Sales retrieved successfully",
-        count: sales.length,
-        data: sales,
-      })
-    } catch (error) {
-      console.error("Error fetching all sales:", error)
-      return res.status(500).json({ message: "Internal server error" })
-    }
-  }
-
-  // Get pending sales for approval
-  static async getPendingSales(req: Request, res: Response) {
-    try {
-      const saleRepository = dbConnection.getRepository(Sale)
-
-      const pendingSales = await saleRepository.find({
-        where: { status: "pending" },
-        relations: ["product", "soldBy"],
-        order: { salesDate: "DESC" },
-      })
-
-      return res.status(200).json({
-        message: "Pending sales retrieved successfully",
-        count: pendingSales.length,
-        data: pendingSales,
-      })
-    } catch (error) {
-      console.error("Error fetching pending sales:", error)
-      return res.status(500).json({ message: "Internal server error" })
-    }
-  }
-
-
-  // Reject a sale
+  // Reject sale with timestamp logging
   static async rejectSale(req: Request, res: Response) {
-    try {
-      const saleRepository = dbConnection.getRepository(Sale)
-      const productRepository = dbConnection.getRepository(Product)
-      const saleId = Number.parseInt(req.params.id)
+    const queryRunner = dbConnection.createQueryRunner()
+    await queryRunner.connect()
+    await queryRunner.startTransaction()
 
-      const sale = await saleRepository.findOne({
-        where: { id: saleId },
+    try {
+      const { saleId } = req.params
+      const { reason } = req.body
+
+      const sale = await queryRunner.manager.findOne(Sale, {
+        where: { id: Number(saleId) },
         relations: ["product", "soldBy"],
       })
 
       if (!sale) {
-        return res.status(404).json({ message: "Sale not found" })
-      }
-
-      if (sale.status !== "pending") {
-        return res.status(400).json({
-          message: `Sale is already ${sale.status}`,
+        await queryRunner.rollbackTransaction()
+        return res.status(404).json({
+          success: false,
+          message: "Sale not found",
         })
       }
 
-      // Restore stock quantity since sale is rejected
-      const product = sale.product
-      product.qtyInStock += sale.qtySold
-      await productRepository.save(product)
+      if (sale.status !== "pending") {
+        await queryRunner.rollbackTransaction()
+        return res.status(400).json({
+          success: false,
+          message: "Sale is not pending approval",
+        })
+      }
 
       // Update sale status
       sale.status = "rejected"
       sale.approvedBy = req.user
+      sale.approvedAt = new Date()
+      sale.notes = reason || "Sale rejected by admin"
 
-      await saleRepository.save(sale)
+      await queryRunner.manager.save(sale)
 
-      return res.status(200).json({
-        message: "Sale rejected successfully and stock restored",
+      // Restore product stock
+      await queryRunner.manager.update(Product, sale.product.id, {
+        qtyInStock: sale.product.qtyInStock + sale.qtySold,
+      })
+
+      await queryRunner.commitTransaction()
+
+      return res.json({
+        success: true,
+        message: "Sale rejected successfully",
         data: sale,
       })
     } catch (error) {
-      console.error("Error rejecting sale:", error)
-      return res.status(500).json({ message: "Internal server error" })
+      await queryRunner.rollbackTransaction()
+      console.error("Reject sale error:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Failed to reject sale",
+      })
+    } finally {
+      await queryRunner.release()
     }
   }
 
-  // Get all employees
-  static async getAllEmployees(req: Request, res: Response) {
+  // Get all employees with performance metrics
+  static async getAllEmployeesWithPerformance(req: Request, res: Response) {
     try {
       const userRepository = dbConnection.getRepository(User)
+      const saleRepository = dbConnection.getRepository(Sale)
+      const productRepository = dbConnection.getRepository(Product)
 
       const employees = await userRepository.find({
-        where: { role: "employee" },
-        select: ["id", "firstName", "lastName", "email", "telephone", "isVerified", "createdAt"],
+        where: { role: UserRole.EMPLOYEE },
+        select: ["id", "firstName", "lastName", "email", "telephone", "isActive", "createdAt", "lastLoginAt"],
         order: { createdAt: "DESC" },
       })
 
-      return res.status(200).json({
-        message: "Employees retrieved successfully",
-        count: employees.length,
-        data: employees,
+      // Get performance data for each employee
+      const employeesWithPerformance = await Promise.all(
+        employees.map(async (employee) => {
+          // Get sales data
+          const sales = await saleRepository.find({
+            where: { soldBy: { id: employee.id }, status: "approved" },
+          })
+
+          // Get products created by employee
+          const productsCreated = await productRepository.count({
+            where: { createdBy: { id: employee.id } },
+          })
+
+          const totalSales = sales.reduce((sum, sale) => sum + Number(sale.totalPrice), 0)
+          const totalProfit = sales.reduce((sum, sale) => sum + Number(sale.profit), 0)
+
+          return {
+            ...employee,
+            performance: {
+              totalSales,
+              totalProfit,
+              totalTransactions: sales.length,
+              productsCreated,
+              avgSaleValue: sales.length > 0 ? totalSales / sales.length : 0,
+              profitMargin: totalSales > 0 ? (totalProfit / totalSales) * 100 : 0,
+            },
+          }
+        }),
+      )
+
+      return res.json({
+        success: true,
+        message: "Employees with performance retrieved successfully",
+        data: {
+          employees: employeesWithPerformance,
+          summary: {
+            totalEmployees: employees.length,
+            activeEmployees: employees.filter((emp) => emp.isActive).length,
+            totalSales: employeesWithPerformance.reduce((sum, emp) => sum + emp.performance.totalSales, 0),
+            totalProfit: employeesWithPerformance.reduce((sum, emp) => sum + emp.performance.totalProfit, 0),
+          },
+        },
       })
     } catch (error) {
-      console.error("Error fetching employees:", error)
-      return res.status(500).json({ message: "Internal server error" })
+      console.error("Get employees with performance error:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch employees with performance",
+      })
     }
   }
 }

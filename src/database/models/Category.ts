@@ -1,7 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from "typeorm"
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn } from "typeorm"
 import { Product } from "./Product"
 
-export interface ProductTypeData {
+export interface ProductType {
   id: string
   name: string
   description?: string
@@ -12,14 +12,14 @@ export class Category {
   @PrimaryGeneratedColumn()
   id: number
 
-  @Column({ type: "varchar", length: 255 })
+  @Column({ unique: true })
   name: string
 
   @Column({ type: "text", nullable: true })
   description?: string
 
-  @Column({ type: "json", default: "[]" })
-  productTypes: ProductTypeData[]
+  @Column({ type: "json", default: [] })
+  productTypes: ProductType[]
 
   @CreateDateColumn()
   createdAt: Date
