@@ -102,4 +102,7 @@ export class Sale {
   )
   @JoinColumn({ name: "approvedById" })
   approvedBy?: User
+
+  @Column({ nullable: true })
+  employeeNotes?: string;
 }

@@ -1,4 +1,3 @@
-
 // @ts-nocheck
 import { Router } from "express"
 import { CategoryController } from "../controllers/CategoryController"
@@ -37,13 +36,13 @@ const productTypeValidation = [
 // Routes with authentication and authorization
 router.post("/", authenticate, authorize([UserRole.ADMIN]), createCategoryValidation, CategoryController.createCategory)
 
-router.get("/", authenticate, CategoryController.listCategories)
+router.get("/", authenticate, CategoryController.getCategories)
 
 router.get(
   "/:id",
   authenticate,
   param("id").isInt().withMessage("Category ID must be an integer"),
-  CategoryController.getCategory,
+  CategoryController.getCategoryById,
 )
 
 router.put(

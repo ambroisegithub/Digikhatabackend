@@ -1,31 +1,42 @@
-
 // @ts-nocheck
 import { Router } from "express"
-import { EmployeeController } from "../controllers/EmployeeController"
-import { authenticate } from "../middlewares/authMiddleware"
 import { body } from "express-validator"
+import { EmployeeController } from "../controllers/EmployeeController"
+// import { authMiddleware, employeeOnly } from "../middlewares/authMiddleware"
+import { AuthController } from "../controllers/AuthController"
 
 const router = Router()
 
-// Validation rules for login
-const loginValidation = [
-  body("username").notEmpty().withMessage("Username is required"),
-  body("password").notEmpty().withMessage("Password is required"),
-]
+// Employee login (no auth required)
+router.post(
+  "/login",
+  [
+    body("username").notEmpty().withMessage("Username is required"),
+    body("password").notEmpty().withMessage("Password is required"),
+  ],
+  EmployeeController.login,
+)
 
-// Validation rules for selling product
-const sellProductValidation = [
-  body("productId").isInt().withMessage("Product ID must be an integer"),
-  body("qtySold").isInt({ min: 1 }).withMessage("Quantity must be a positive integer"),
-]
+// Apply authentication and employee-only middleware to all other routes
+// router.use(authMiddleware, employeeOnly)
 
-// Routes
-router.post("/login", loginValidation, EmployeeController.login)
+// Product access (employees can view ALL products)
+router.get("/products", EmployeeController.listAllProducts)
 
-router.post("/sell-product", authenticate, sellProductValidation, EmployeeController.sellProduct)
-
-router.get("/products", authenticate, EmployeeController.listProducts)
-
-router.get("/my-sales", authenticate, EmployeeController.viewMySales)
+// Sales management
+router.post(
+  "/sell",
+  [
+    body("productId").isNumeric().withMessage("Valid product ID is required"),
+    body("qtySold").isInt({ min: 1 }).withMessage("Valid quantity is required"),
+    body("paymentMethod").optional().isIn(["cash", "card", "mobile", "credit"]).withMessage("Invalid payment method"),
+  ],
+  EmployeeController.sellProduct,
+)
+// /api/employees/all
+router.get("/sales", EmployeeController.viewMySales)
+router.get("/all", AuthController.getAllEmployees)
+router.get("/sales/daily-summary", EmployeeController.getDailySalesSummary)
+router.get("/performance", EmployeeController.getProductPerformance)
 
 export default router

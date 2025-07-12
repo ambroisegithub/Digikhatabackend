@@ -1,5 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from "typeorm"
-import { UserRole } from "../../Enums/UserRole"
+import { Product } from "./Product"
 import { Sale } from "./Sale"
 import { StockMovement } from "./StockMovement"
 
@@ -18,20 +18,19 @@ export class User {
   password: string
 
   @Column()
-  telephone: string
-
-  @Column()
   firstName: string
 
   @Column()
   lastName: string
 
-  @Column({
-    type: "enum",
-    enum: UserRole,
-    default: UserRole.EMPLOYEE,
-  })
-  role: UserRole
+  @Column()
+  telephone: string
+
+  @Column({ type: "enum", enum: ["admin", "employee"], default: "employee" })
+  role: string
+
+  @Column({ default: true })
+  isActive: boolean
 
   @Column({ default: false })
   isVerified: boolean
@@ -51,6 +50,12 @@ export class User {
   @Column({ nullable: true })
   lastLoginAt?: Date
 
+  @Column({ nullable: true })
+  resetPasswordToken?: string
+
+  @Column({ nullable: true })
+  resetPasswordExpires?: Date
+
   @CreateDateColumn()
   createdAt: Date
 
@@ -58,12 +63,27 @@ export class User {
   updatedAt: Date
 
   // Relationships
-  @OneToMany(() => Sale, (sale) => sale.soldBy)
+  @OneToMany(
+    () => Product,
+    (product) => product.createdBy,
+  )
+  productsCreated: Product[]
+
+  @OneToMany(
+    () => Sale,
+    (sale) => sale.soldBy,
+  )
   salesMade: Sale[]
 
-  @OneToMany(() => Sale, (sale) => sale.approvedBy)
+  @OneToMany(
+    () => Sale,
+    (sale) => sale.approvedBy,
+  )
   salesApproved: Sale[]
 
-  @OneToMany(() => StockMovement, (stockMovement) => stockMovement.recordedBy)
+  @OneToMany(
+    () => StockMovement,
+    (movement) => movement.recordedBy,
+  )
   stockMovements: StockMovement[]
 }
